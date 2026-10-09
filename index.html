@@ -139,6 +139,7 @@ const PULSE_SCALE = 0.04;    // how much the bloom swells on a pulse (0.04 = 4%)
 const SPOT_MIN = 0.50;        // dimmest the spotlights get while idle (0 to 1)
 const SPOT_MAX = 0.85;        // brightest while idle (a tap pulse goes up to 1)
 const SPOT_PULSE_DECAY = 2.4; // lower = the spotlight flash lingers longer than the bloom
+const SPOT_SPEED = 1.8;   // 1 = original speed, 2 = twice as fast
 
 // ---- Smoke: slow ease in and out. Each layer has its own rhythm ----
 const SMOKE = [
@@ -252,7 +253,8 @@ function runScene(t) {
   sc.bloom = 1 + PULSE_SCALE * p;
 
   // Background spotlights: their own twinkle rhythm, same tap pulse (no swelling, so they stay on the stage)
-  const wobble2 = 0.55 * Math.sin(t * 1.3 + 2.0) + 0.45 * Math.sin(t * 3.1 + 0.4);
+  const ts = t * SPOT_SPEED;
+  const wobble2 = 0.55 * Math.sin(ts * 1.3 + 2.0) + 0.45 * Math.sin(ts * 3.1 + 0.4);
   const spot = SPOT_MIN + (SPOT_MAX - SPOT_MIN) * (0.5 + 0.5 * wobble2);
   let ps = 0;
   if (k >= 0) ps = k < PULSE_RISE ? k / PULSE_RISE : Math.exp(-(k - PULSE_RISE) * SPOT_PULSE_DECAY);
