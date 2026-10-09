@@ -123,7 +123,7 @@ const IDLE_PERIOD = 7;       // seconds per idle sway cycle
   offset     seconds before the group starts, so groups don't move in sync
 */
 const DOODLE_GROUPS = [
-  { ids: ["a1", "a2", "a3"],             mode: "pingpong", frameTime: 0.28, pause: 0,   offset: 0 },
+  { ids: ["a1", "a2", "a3"],             mode: "pingpong", frameTime: 0.28, pause: 0,   offset: 0, opacity: 0.6 },
   { ids: ["b1", "b2", "b3"],             mode: "loop",     frameTime: 0.22, pause: 1.0,   offset: 0 },
   { ids: ["c1", "c2", "c3", "c4", "c5"], mode: "pingpong", frameTime: 0.16, pause: 2.0, offset: 1.5 }
 ];
@@ -284,7 +284,8 @@ function runScene(t) {
         frameIdx = g.seq[Math.min(g.seq.length - 1, Math.floor(m / g.frameTime))];
       }
     }
-    for (let i = 0; i < g.ids.length; i++) op[g.ids[i]] = (i === frameIdx) ? 1 : 0;
+    const level = g.opacity != null ? g.opacity : 1;
+for (let i = 0; i < g.ids.length; i++) op[g.ids[i]] = (i === frameIdx) ? level : 0;
   }
 }
 
