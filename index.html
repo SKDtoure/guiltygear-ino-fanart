@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tilt Parallax</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #151515; overflow: hidden; }
+  body { display: grid; place-items: center; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  .stage {
+    --ar: 1;
+    position: relative;
+    width: min(100vw, calc(100dvh * var(--ar)));
+    aspect-ratio: var(--ar);
+    overflow: hidden;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .layer {
+    position: absolute;
+    left: 0; top: 0; width: 100%; height: 100%;
+    object-fit: fill;
+    will-change: transform;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .ui {
+    position: absolute; left: 0; right: 0; bottom: max(16px, env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    pointer-events: none;
+  }
+  button#enable {
+    pointer-events: auto;
+    font-weight: 600; font-size: 15px; line-height: 1; font-family: inherit;
+    padding: 12px 20px; border-radius: 999px; border: 0;
+    background: #f2f2f2; color: #151515; cursor: pointer;
+  }
+  button#enable:focus-visible { outline: 3px solid #7fb4ff; outline-offset: 3px; }
+  .hint {
+    font-size: 13px; color: #fff; background: rgba(0,0,0,.55);
+    padding: 6px 12px; border-radius: 999px;
+    transition: opacity .6s ease;
+  }
+  .hidden { display: none !important; }
+  .fade { opacity: 0; }
+</style>
+</head>
+<body>
+
+<main class="stage" id="stage" aria-label="Animated illustration that shifts as you tilt your phone or move your mouse. Tap to pulse the lights.">
+  <div class="ui">
+    <button id="enable" class="hidden" type="button">Tap to enable tilt</button>
+    <div id="hint" class="hint hidden"></div>
+  </div>
+</main>
+
+<script>
+/* ======================= EDIT THESE ======================= */
+
+/*
+  LAYERS: list from BACK to FRONT (the order of lines = stacking order).
+
+  id          a short name the animation script uses
+  depth       0 = barely moves, 1+ = moves the most
+  controlled  true = the script sets this layer's opacity (fades, frame swaps)
+  rest        opacity of a controlled layer if motion is turned off (default 0)
+  rotate / idleRotate / breathe / origin   optional, same as before
+
+  The guitarist and guitarist-lit layers share GUITARIST settings so they always
+  move and breathe together and never drift apart.
+*/
+const GUITARIST = { depth: 0.60, breathe: 0.008, origin: "50% 80%" };
+
+const LAYERS = [
+  { id: "background", src: "layer1-background.png",            depth: 0.15 },
+  { id: "bglight",    src: "layer1-background-light.png",      depth: 0.15, controlled: true, rest: 0.85 },
+  { id: "bloom",      src: "layer1-background-lightbloom.png", depth: 0.15, controlled: true, rest: 0.5 },
+  { id: "smoke1",     src: "layer1-background-smoke1.png",     depth: 0.20, controlled: true, rest: 0.3 },
+  { id: "smoke2",     src: "layer1-background-smoke2.png",     depth: 0.28, controlled: true, rest: 0.3 },
+
+  { id: "panelsfar",  src: "layer2-panels-far.png",            depth: 0.40, rotate: 2.0, idleRotate: 0.5 },
+
+  // Doodle group A (behind the guitarist). Frame 1 is the resting frame.
+  { id: "a1", src: "layer3-doodle-Agroup1.png", depth: 0.50, controlled: true, rest: 1 },
+  { id: "a2", src: "layer3-doodle-Agroup2.png", depth: 0.50, controlled: true },
+  { id: "a3", src: "layer3-doodle-Agroup3.png", depth: 0.50, controlled: true },
+
+  { id: "guitarist",  src: "layer4-guitarist.png",             ...GUITARIST },
+  { id: "lit",        src: "layer4-guitarist-lit.png",         ...GUITARIST, controlled: true },
+
+  // Doodle group B (in front of the guitarist)
+  { id: "b1", src: "layer5-doodle-Bgroup1.png", depth: 0.75, controlled: true, rest: 1 },
+  { id: "b2", src: "layer5-doodle-Bgroup2.png", depth: 0.75, controlled: true },
+  { id: "b3", src: "layer5-doodle-Bgroup3.png", depth: 0.75, controlled: true },
+
+  { id: "panelsnear", src: "layer6-panels-near.png",           depth: 0.90, rotate: -3.5, idleRotate: 0.8 },
+
+  // Doodle group C (frontmost)
+  { id: "c1", src: "layer7-doodle-Cgroup1.png", depth: 1.20, controlled: true, rest: 1 },
+  { id: "c2", src: "layer7-doodle-Cgroup2.png", depth: 1.20, controlled: true },
+  { id: "c3", src: "layer7-doodle-Cgroup3.png", depth: 1.20, controlled: true },
+  { id: "c4", src: "layer7-doodle-Cgroup4.png", depth: 1.20, controlled: true },
+  { id: "c5", src: "layer7-doodle-Cgroup5.png", depth: 1.20, controlled: true }
+];
+
+// ---- Movement feel ----
+const MAX_SHIFT = 0.03;      // front-layer travel as a fraction of image width
+const TILT_RANGE = 20;       // degrees of phone tilt for full movement
+const SMOOTHING = 0.08;      // 0.04 = floaty, 0.15 = snappy
+const DIRECTION = 1;         // set to -1 if the movement feels backwards
+const BREATH_PERIOD = 4.2;   // seconds per breath
+const IDLE_PERIOD = 7;       // seconds per idle sway cycle
+
+// ---- Doodle groups: each one loops on its own clock ----
+/*
+  ids        the frames in order (frame 1 is the resting frame)
+  mode       "pingpong" = 1,2,3,2,1,2,3...    "loop" = 1,2,3,1,2,3...
+  frameTime  seconds each frame stays on screen (about 0.2 to 0.4 reads as gentle)
+  pause      seconds of rest on frame 1 between cycles (0 = loops constantly)
+  offset     seconds before the group starts, so groups don't move in sync
+*/
+const DOODLE_GROUPS = [
+  { ids: ["a1", "a2", "a3"],             mode: "pingpong", frameTime: 0.28, pause: 0,   offset: 0 },
+  { ids: ["b1", "b2", "b3"],             mode: "loop",     frameTime: 0.22, pause: 0,   offset: 0 },
+  { ids: ["c1", "c2", "c3", "c4", "c5"], mode: "pingpong", frameTime: 0.30, pause: 3.0, offset: 1.5 }
+];
+
+// ---- Light bloom: twinkles when idle, pulses on tap ----
+const TWINKLE_MIN = 0.35;    // dimmest the bloom gets while idle (0 to 1)
+const TWINKLE_MAX = 0.75;    // brightest the bloom gets while idle
+const PULSE_RISE = 0.08;     // seconds for a tap pulse to reach full brightness
+const PULSE_DECAY = 3.2;     // higher = pulse dies faster
+const PULSE_SCALE = 0.04;    // how much the bloom swells on a pulse (0.04 = 4%)
+
+// ---- Background spotlights: same idea as the bloom, but on their own rhythm ----
+const SPOT_MIN = 0.50;        // dimmest the spotlights get while idle (0 to 1)
+const SPOT_MAX = 0.85;        // brightest while idle (a tap pulse goes up to 1)
+const SPOT_PULSE_DECAY = 2.4; // lower = the spotlight flash lingers longer than the bloom
+
+// ---- Smoke: slow ease in and out. Each layer has its own rhythm ----
+const SMOKE = [
+  { id: "smoke1", period: 9,  phase: 0.0, min: 0.05, max: 0.90 },
+  { id: "smoke2", period: 13, phase: 2.1, min: 0.05, max: 0.85 }
+];
+
+// ---- Rim-lit guitarist: fades in while you tilt, back to normal when idle ----
+const LIT_TILT_GAIN = 1.6;   // how quickly the rim light reaches full strength as you tilt
+const LIT_IDLE_AFTER = 1.2;  // seconds of stillness before it fades back out
+const LIT_MOVE_EPS = 0.004;  // how small a movement still counts as "still" (raise if it never goes idle)
+const LIT_SMOOTH = 0.05;     // fade speed: lower = slower, softer
+
+/* ======================= CODE ======================= */
+
+const stage = document.getElementById("stage");
+const enableBtn = document.getElementById("enable");
+const hint = document.getElementById("hint");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const TAU = Math.PI * 2;
+
+// Build the layers
+const layers = LAYERS.map((cfg, i) => {
+  const img = new Image();
+  img.className = "layer";
+  img.alt = "";
+  img.draggable = false;
+  img.src = cfg.src;
+  img.style.transformOrigin = cfg.origin || "50% 50%";
+  const rest = cfg.rest != null ? cfg.rest : 0;
+  if (cfg.controlled) img.style.opacity = rest;
+  stage.insertBefore(img, stage.querySelector(".ui"));
+  return {
+    id: cfg.id,
+    el: img,
+    depth: cfg.depth,
+    rotate: cfg.rotate || 0,
+    idleRotate: cfg.idleRotate || 0,
+    breathe: cfg.breathe || 0,
+    controlled: !!cfg.controlled,
+    rest: rest,
+    phase: i * 1.7,
+    shift: 0,
+    lastOp: -1
+  };
+});
+
+// Match stage to the first layer's aspect ratio
+function setAspect() {
+  const first = layers[0].el;
+  if (first.naturalWidth) stage.style.setProperty("--ar", first.naturalWidth / first.naturalHeight);
+  sizeLayers();
+}
+layers[0].el.addEventListener("load", setAspect);
+if (layers[0].el.complete) setAspect();
+
+// Each layer is enlarged by the distance it can travel, so edges never show.
+function sizeLayers() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  layers.forEach(l => {
+    l.shift = l.depth * MAX_SHIFT * w;
+    const pad = l.shift;
+    l.el.style.left = -pad + "px";
+    l.el.style.top = -pad + "px";
+    l.el.style.width = (w + pad * 2) + "px";
+    l.el.style.height = (h + pad * 2) + "px";
+  });
+}
+new ResizeObserver(sizeLayers).observe(stage);
+
+/* ---------- Doodle groups: build each group's frame order once ---------- */
+
+for (const g of DOODLE_GROUPS) {
+  const n = g.ids.length;
+  g.seq = [];
+  for (let i = 0; i < n; i++) g.seq.push(i);                       // 0,1,2...
+  if (g.mode === "pingpong") {
+    for (let i = n - 2; i >= 1; i--) g.seq.push(i);                // ...then back down, without repeating the ends
+  }
+  g.cycle = g.seq.length * g.frameTime;                            // length of one pass
+  g.total = g.cycle + g.pause;                                     // pass plus rest
+}
+
+/* ---------- Movement state ---------- */
+
+let tx = 0, ty = 0, cx = 0, cy = 0;
+
+/* ---------- Scene (bloom, spotlights, smoke, rim light, doodles) ---------- */
+
+let op = {};            // opacity per controlled layer this frame, by id
+let sc = {};            // extra scale per layer this frame, by id
+let pulseStart = -99;   // time of the last tap (seconds)
+let lit = 0;            // current rim-light amount, 0 to 1
+let lastMove = 0;       // last time the tilt or mouse moved
+let prevTx = 0, prevTy = 0;
+
+function runScene(t) {
+  op = {};
+  sc = {};
+
+  // Light bloom: irregular idle twinkle, plus a pulse on tap
+  const wobble = 0.6 * Math.sin(t * 1.9) + 0.4 * Math.sin(t * 4.3 + 1.3);   // -1 to 1
+  const tw = TWINKLE_MIN + (TWINKLE_MAX - TWINKLE_MIN) * (0.5 + 0.5 * wobble);
+  const k = t - pulseStart;
+  let p = 0;
+  if (k >= 0) p = k < PULSE_RISE ? k / PULSE_RISE : Math.exp(-(k - PULSE_RISE) * PULSE_DECAY);
+  op.bloom = tw + (1 - tw) * p;
+  sc.bloom = 1 + PULSE_SCALE * p;
+
+  // Background spotlights: their own twinkle rhythm, same tap pulse (no swelling, so they stay on the stage)
+  const wobble2 = 0.55 * Math.sin(t * 1.3 + 2.0) + 0.45 * Math.sin(t * 3.1 + 0.4);
+  const spot = SPOT_MIN + (SPOT_MAX - SPOT_MIN) * (0.5 + 0.5 * wobble2);
+  let ps = 0;
+  if (k >= 0) ps = k < PULSE_RISE ? k / PULSE_RISE : Math.exp(-(k - PULSE_RISE) * SPOT_PULSE_DECAY);
+  op.bglight = spot + (1 - spot) * ps;
+
+  // Smoke: smooth ease in and out
+  for (const s of SMOKE) {
+    const e = (1 - Math.cos(t * TAU / s.period + s.phase)) / 2;   // 0 to 1
+    const eased = e * e * (3 - 2 * e);                            // softer at both ends
+    op[s.id] = s.min + (s.max - s.min) * eased;
+  }
+
+  // Rim-lit guitarist: strength follows tilt, falls back to 0 when still
+  const moved = Math.abs(tx - prevTx) + Math.abs(ty - prevTy);
+  prevTx = tx; prevTy = ty;
+  if (moved > LIT_MOVE_EPS) lastMove = t;
+  const idle = (t - lastMove) > LIT_IDLE_AFTER;
+  const target = idle ? 0 : clamp(Math.hypot(cx, cy) * LIT_TILT_GAIN, 0, 1);
+  lit += (target - lit) * LIT_SMOOTH;
+  op.lit = lit;
+
+  // Doodle groups: each steps through its own frames on its own clock
+  for (const g of DOODLE_GROUPS) {
+    let frameIdx = 0;                                             // resting frame
+    const u = t - g.offset;
+    if (u >= 0) {
+      const m = u % g.total;
+      if (m < g.cycle) {
+        frameIdx = g.seq[Math.min(g.seq.length - 1, Math.floor(m / g.frameTime))];
+      }
+    }
+    for (let i = 0; i < g.ids.length; i++) op[g.ids[i]] = (i === frameIdx) ? 1 : 0;
+  }
+}
+
+function frame(now) {
+  const t = now / 1000;
+  cx += (tx - cx) * SMOOTHING;
+  cy += (ty - cy) * SMOOTHING;
+
+  runScene(t);
+
+  for (const l of layers) {
+    const dx = -cx * l.shift * DIRECTION;
+    const dy = -cy * l.shift * DIRECTION;
+
+    const rot =
+      cx * l.rotate * DIRECTION +
+      Math.sin(t * TAU / IDLE_PERIOD + l.phase) * l.idleRotate;
+
+    let sx = 1, sy = 1;
+    if (l.breathe) {
+      const s = Math.sin(t * TAU / BREATH_PERIOD);
+      sy = 1 + l.breathe * s;
+      sx = 1 + l.breathe * 0.35 * s;
+    }
+    const boost = sc[l.id] || 1;
+    sx *= boost; sy *= boost;
+
+    l.el.style.transform =
+      "translate3d(" + dx + "px," + dy + "px,0) rotate(" + rot + "deg) scale(" + sx + "," + sy + ")";
+
+    if (l.controlled) {
+      const v = (l.id in op) ? op[l.id] : l.rest;
+      if (v !== l.lastOp) { l.el.style.opacity = v; l.lastOp = v; }
+    }
+  }
+  requestAnimationFrame(frame);
+}
+if (!reduceMotion) requestAnimationFrame(frame);
+
+/* ---------- Input: mouse, tilt, taps ---------- */
+
+stage.addEventListener("pointermove", e => {
+  if (e.pointerType === "touch" || reduceMotion) return;
+  const r = stage.getBoundingClientRect();
+  tx = clamp(((e.clientX - r.left) / r.width) * 2 - 1, -1, 1);
+  ty = clamp(((e.clientY - r.top) / r.height) * 2 - 1, -1, 1);
+});
+stage.addEventListener("pointerleave", e => {
+  if (e.pointerType !== "touch") { tx = 0; ty = 0; }
+});
+
+let base = null;
+let gotSensor = false;
+
+function onOrientation(e) {
+  if (e.gamma == null || e.beta == null || reduceMotion) return;
+  gotSensor = true;
+  if (!base) base = { g: e.gamma, b: e.beta };
+  tx = clamp((e.gamma - base.g) / TILT_RANGE, -1, 1);
+  ty = clamp((e.beta - base.b) / TILT_RANGE, -1, 1);
+}
+
+function showHint(text, ms) {
+  hint.textContent = text;
+  hint.classList.remove("hidden", "fade");
+  clearTimeout(showHint.t);
+  showHint.t = setTimeout(() => {
+    hint.classList.add("fade");
+    setTimeout(() => hint.classList.add("hidden"), 700);
+  }, ms);
+}
+
+function startTilt() {
+  window.addEventListener("deviceorientation", onOrientation);
+  enableBtn.classList.add("hidden");
+  showHint("Tilt your phone. Tap to pulse the lights. Double-tap to re-center.", 5000);
+  setTimeout(() => {
+    if (!gotSensor) showHint("No motion sensor found. Move your mouse over the image.", 4000);
+  }, 1500);
+}
+
+// Tap = pulse the bloom and spotlights. Double-tap = re-center the tilt.
+let lastTap = 0;
+stage.addEventListener("pointerdown", () => {
+  const now = performance.now();
+  if (now - lastTap < 350) {
+    base = null;
+    lastTap = 0;
+    showHint("Re-centered.", 1200);
+    return;
+  }
+  lastTap = now;
+  if (!reduceMotion) pulseStart = now / 1000;
+});
+
+const needsPermission =
+  typeof DeviceOrientationEvent !== "undefined" &&
+  typeof DeviceOrientationEvent.requestPermission === "function";
+
+const isTouch = matchMedia("(pointer: coarse)").matches;
+
+if (needsPermission) {
+  enableBtn.classList.remove("hidden");
+  enableBtn.addEventListener("click", async () => {
+    try {
+      const result = await DeviceOrientationEvent.requestPermission();
+      if (result === "granted") {
+        startTilt();
+      } else {
+        enableBtn.classList.add("hidden");
+        showHint("Motion access was denied. Reload the page to try again.", 5000);
+      }
+    } catch (err) {
+      showHint("Couldn't enable tilt on this page.", 4000);
+    }
+  });
+} else if (isTouch && "DeviceOrientationEvent" in window) {
+  startTilt();
+} else {
+  showHint("Move your mouse over the image. Click to pulse the lights.", 4000);
+}
+</script>
+</body>
+</html>
