@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tilt Parallax</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #151515; overflow: hidden; }
+  body { display: grid; place-items: center; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  .stage {
+    --ar: 1;
+    position: relative;
+    width: min(100vw, calc(100dvh * var(--ar)));
+    aspect-ratio: var(--ar);
+    overflow: hidden;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+  .layer {
+    position: absolute;
+    left: 0; top: 0; width: 100%; height: 100%;
+    object-fit: fill;
+    will-change: transform;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .ui {
+    position: absolute; left: 0; right: 0; bottom: max(16px, env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    pointer-events: none;
+  }
+  button#enable {
+    pointer-events: auto;
+    font-weight: 600; font-size: 15px; line-height: 1; font-family: inherit;
+    padding: 12px 20px; border-radius: 999px; border: 0;
+    background: #f2f2f2; color: #151515; cursor: pointer;
+  }
+  button#enable:focus-visible { outline: 3px solid #7fb4ff; outline-offset: 3px; }
+  .hint {
+    font-size: 13px; color: #fff; background: rgba(0,0,0,.55);
+    padding: 6px 12px; border-radius: 999px;
+    transition: opacity .6s ease;
+  }
+  .hidden { display: none !important; }
+  .fade { opacity: 0; }
+
+  /* ---- Events sheet (long press) ---- */
+  .sheet {
+    position: fixed; left: 50%; bottom: 0; z-index: 20;
+    width: min(100vw, 520px); max-height: 82dvh; overflow: auto; overscroll-behavior: contain;
+    box-sizing: border-box; padding: 22px 20px max(22px, env(safe-area-inset-bottom));
+    background: rgba(16, 14, 20, .94);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border-top: 2px solid #d6338a; border-radius: 20px 20px 0 0;
+    color: #f2eef4;
+    transform: translate(-50%, 105%);
+    transition: transform .45s cubic-bezier(.2,.8,.2,1);
+    box-shadow: 0 -10px 40px rgba(214, 51, 138, .2);
+  }
+  .sheet.open { transform: translate(-50%, 0); }
+  .sheet .close {
+    position: absolute; top: 10px; right: 12px; width: 36px; height: 36px;
+    border: 0; border-radius: 50%; background: rgba(255,255,255,.1); color: #fff;
+    font-size: 20px; line-height: 1; cursor: pointer;
+  }
+  .sheet .close:focus-visible { outline: 3px solid #7fb4ff; outline-offset: 2px; }
+  .kicker { font-size: 12px; letter-spacing: .2em; color: #ff6cb8; text-transform: uppercase; }
+  .sheet h2 { margin: 6px 40px 0 0; font-size: 22px; font-weight: 700; line-height: 1.2; }
+  .sub { font-size: 14px; color: #b7aebb; margin-top: 2px; }
+  .legend { margin-top: 12px; font-size: 12px; color: #b7aebb; display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend .evo-key { color: #ffc233; font-weight: 700; }
+  .groups h3 { margin: 18px 0 6px; font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: #ff6cb8; font-weight: 600; }
+  .ev { display: grid; grid-template-columns: 104px 1fr; gap: 3px 12px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,.09); }
+  .ev .d { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ev .n { font-size: 15px; font-weight: 600; }
+  .ev .p { grid-column: 2; font-size: 12px; color: #b7aebb; margin-top: -1px; }
+  .ev .tags { grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .tag { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid rgba(255,255,255,.25); color: #cfc7d3; }
+  .tag.tbd { border-style: dashed; }
+  .ev.evo { background: linear-gradient(90deg, rgba(255,194,51,.16), rgba(255,194,51,.04)); border-left: 3px solid #ffc233; padding-left: 9px; margin-left: -12px; }
+  .ev.evo .n { color: #ffd36b; }
+  .ev.evo .n::before { content: "\2605  "; }
+  .ev.evo .tag.evotag { border-color: #ffc233; color: #ffc233; }
+  .ev.done { opacity: .45; }
+  .note { margin: 16px 0 0; font-size: 11px; line-height: 1.5; color: #8d858f; }
+</style>
+</head>
+<body>
+
+<main class="stage" id="stage" aria-label="Animated illustration that shifts as you tilt your phone or move your mouse. Tap to pulse the lights. Press and hold to play or stop I-No's theme. Shake your phone to see upcoming Guilty Gear -Strive- tournaments.">
+  <div class="ui">
+    <button id="enable" class="hidden" type="button">Tap to enable tilt</button>
+    <div id="hint" class="hint hidden"></div>
+  </div>
+</main>
+
+<section class="sheet" id="sheet" role="dialog" aria-label="Upcoming Guilty Gear Strive events" aria-hidden="true">
+  <button class="close" id="sheetClose" type="button" aria-label="Close events list">&times;</button>
+  <div class="kicker">Guilty Gear -Strive-</div>
+  <h2>Upcoming FGC events</h2>
+  <div class="sub">Nov 2026 onward</div>
+  <div class="legend"><span><span class="evo-key">\u2605 Evo</span> = Evolution Championship Series stop</span><span>Dashed tag = still to be announced</span></div>
+  <div class="groups" id="groups"></div>
+  <p class="note" id="sheetNote"></p>
+</section>
+
+<script>
+/* ======================= EDIT THESE ======================= */
+
+/*
+  LAYERS: list from BACK to FRONT (the order of lines = stacking order).
+
+  id          a short name the animation script uses
+  depth       0 = barely moves, 1+ = moves the most
+  controlled  true = the script sets this layer's opacity (fades, frame swaps)
+  rest        opacity of a controlled layer if motion is turned off (default 0)
+  rotate / idleRotate / breathe / origin   optional, same as before
+
+  The guitarist and guitarist-lit layers share GUITARIST settings so they always
+  move and breathe together and never drift apart.
+*/
+const GUITARIST = { depth: 0.60, breathe: 0.008, origin: "50% 80%" };
+
+const LAYERS = [
+  { id: "background", src: "layer1-background.png",            depth: 0.15 },
+  { id: "bglight",    src: "layer1-background-light.png",      depth: 0.15, controlled: true, rest: 0.85 },
+  { id: "bloom",      src: "layer1-background-lightbloom.png", depth: 0.15, controlled: true, rest: 0.5 },
+  { id: "smoke1",     src: "layer1-background-smoke1.png",     depth: 0.20, controlled: true, rest: 0.3 },
+  { id: "smoke2",     src: "layer1-background-smoke2.png",     depth: 0.28, controlled: true, rest: 0.3 },
+
+  { id: "panelsfar",  src: "layer2-panels-far.png",            depth: 0.40, rotate: 2.0, idleRotate: 0.5 },
+
+  // Doodle group A (behind the guitarist). Frame 1 is the resting frame.
+  { id: "a1", src: "layer3-doodle-Agroup1.png", depth: 0.50, controlled: true, rest: 1 },
+  { id: "a2", src: "layer3-doodle-Agroup2.png", depth: 0.50, controlled: true },
+  { id: "a3", src: "layer3-doodle-Agroup3.png", depth: 0.50, controlled: true },
+
+  { id: "guitarist",  src: "layer4-guitarist.png",             ...GUITARIST },
+  { id: "lit",        src: "layer4-guitarist-lit.png",         ...GUITARIST, controlled: true },
+
+  // Doodle group B (in front of the guitarist)
+  { id: "b1", src: "layer5-doodle-Bgroup1.png", depth: 0.75, controlled: true, rest: 1 },
+  { id: "b2", src: "layer5-doodle-Bgroup2.png", depth: 0.75, controlled: true },
+  { id: "b3", src: "layer5-doodle-Bgroup3.png", depth: 0.75, controlled: true },
+
+  { id: "panelsnear", src: "layer6-panels-near.png",           depth: 0.90, rotate: -3.5, idleRotate: 0.8 },
+
+  // Doodle group C (frontmost)
+  { id: "c1", src: "layer7-doodle-Cgroup1.png", depth: 1.20, controlled: true, rest: 1 },
+  { id: "c2", src: "layer7-doodle-Cgroup2.png", depth: 1.20, controlled: true },
+  { id: "c3", src: "layer7-doodle-Cgroup3.png", depth: 1.20, controlled: true },
+  { id: "c4", src: "layer7-doodle-Cgroup4.png", depth: 1.20, controlled: true },
+  { id: "c5", src: "layer7-doodle-Cgroup5.png", depth: 1.20, controlled: true }
+];
+
+// ---- Movement feel ----
+const MAX_SHIFT = 0.03;      // front-layer travel as a fraction of image width
+const TILT_RANGE = 20;       // degrees of phone tilt for full movement
+const SMOOTHING = 0.08;      // 0.04 = floaty, 0.15 = snappy
+const DIRECTION = 1;         // set to -1 if the movement feels backwards
+const BREATH_PERIOD = 4.2;   // seconds per breath
+const IDLE_PERIOD = 7;       // seconds per idle sway cycle
+
+// ---- Doodle groups: each one loops on its own clock ----
+/*
+  ids        the frames in order (frame 1 is the resting frame)
+  mode       "pingpong" = 1,2,3,2,1,2,3...    "loop" = 1,2,3,1,2,3...
+  frameTime  seconds each frame stays on screen (about 0.2 to 0.4 reads as gentle)
+  pause      seconds of rest on frame 1 between cycles (0 = loops constantly)
+  offset     seconds before the group starts, so groups don't move in sync
+*/
+const DOODLE_GROUPS = [
+  { ids: ["a1", "a2", "a3"],             mode: "pingpong", frameTime: 0.28, pause: 0,   offset: 0 },
+  { ids: ["b1", "b2", "b3"],             mode: "loop",     frameTime: 0.22, pause: 0,   offset: 0 },
+  { ids: ["c1", "c2", "c3", "c4", "c5"], mode: "pingpong", frameTime: 0.30, pause: 3.0, offset: 1.5 }
+];
+
+// ---- Light bloom: twinkles when idle, pulses on tap ----
+const TWINKLE_MIN = 0.35;    // dimmest the bloom gets while idle (0 to 1)
+const TWINKLE_MAX = 0.75;    // brightest the bloom gets while idle
+const PULSE_RISE = 0.08;     // seconds for a tap pulse to reach full brightness
+const PULSE_DECAY = 3.2;     // higher = pulse dies faster
+const PULSE_SCALE = 0.04;    // how much the bloom swells on a pulse (0.04 = 4%)
+
+// ---- Background spotlights: same idea as the bloom, but on their own rhythm ----
+const SPOT_MIN = 0.50;        // dimmest the spotlights get while idle (0 to 1)
+const SPOT_MAX = 0.85;        // brightest while idle (a tap pulse goes up to 1)
+const SPOT_PULSE_DECAY = 2.4; // lower = the spotlight flash lingers longer than the bloom
+
+// ---- Smoke: slow ease in and out. Each layer has its own rhythm ----
+const SMOKE = [
+  { id: "smoke1", period: 9,  phase: 0.0, min: 0.05, max: 0.90 },
+  { id: "smoke2", period: 13, phase: 2.1, min: 0.05, max: 0.85 }
+];
+
+// ---- Rim-lit guitarist: fades in while you tilt, back to normal when idle ----
+const LIT_TILT_GAIN = 1.6;   // how quickly the rim light reaches full strength as you tilt
+const LIT_IDLE_AFTER = 1.2;  // seconds of stillness before it fades back out
+const LIT_MOVE_EPS = 0.004;  // how small a movement still counts as "still" (raise if it never goes idle)
+const LIT_SMOOTH = 0.05;     // fade speed: lower = slower, softer
+
+// ---- Music: press and hold to play or stop I-No's theme ----
+// Keep the MP3 in the same folder as this page. The file name must match exactly, including capitals and spaces.
+//   start   seconds into the song where it begins (e.g. 45 = start at 0:45)
+//   length  seconds to play from there (0 = play the whole song)
+//   fade    seconds of fade-out at the end of a clip (ignored when length is 0)
+const AUDIO_SRC = "Ino Theme - Requiem.mp3";
+const AUDIO_START = 0;
+const AUDIO_LENGTH = 60;
+const AUDIO_FADE = 2;
+const AUDIO_VOLUME = 1;             // 0 to 1
+const AUDIO_LOOP = false;           // true = the song starts over by itself when it ends
+
+// ---- Shake: phone (opens the events list) ----
+const SHAKE_THRESHOLD = 22;  // how hard each jolt must be (lower = easier to trigger, higher = needs a harder shake)
+const SHAKE_SPIKES = 3;      // how many jolts within SHAKE_WINDOW count as a shake (stops accidental bumps)
+const SHAKE_WINDOW = 0.6;    // seconds
+const SHAKE_COOLDOWN = 1.0;  // seconds before another shake is noticed
+
+// ---- Shake: mouse (wiggle the pointer quickly back and forth, opens the events list) ----
+const MOUSE_MIN_STROKE = 40; // pixels the pointer must travel in one direction to count as a stroke
+const MOUSE_STROKES = 4;     // how many back-and-forth strokes within MOUSE_WINDOW count as a shake
+const MOUSE_WINDOW = 0.8;    // seconds
+
+// ---- Long press -> music on/off ----
+const LONG_PRESS_TIME = 0.5;   // seconds you must hold before the music starts or stops
+const TAP_MAX_MOVE = 14;       // pixels a finger/mouse may move and still count as a press
+const EVENTS_TIMEZONE = "Asia/Tokyo";   // "today" is worked out in this time zone
+
+/*
+  EVENTS: every Guilty Gear -Strive- event listed, in date order.
+  date    how the dates are shown ("TBD" if not announced)
+  last    final day, YYYY-MM-DD, used to grey out events that have passed (leave out when the date is TBD)
+  name    event name
+  place   city / venue
+  tags    small labels under the event
+  evo     true = highlighted as an Evo stop
+  tbd     true = shown in the "To be announced" group instead of by date
+  Online qualifiers are the AWT (Arc World Tour) "Silver" ranking events.
+*/
+const EVENT_GROUPS = [
+  { name: "Late 2026", events: [
+    { date: "Nov 20\u201322", last: "2026-11-22", name: "Battle Coliseum 2026",  place: "S\u00E3o Paulo, Brazil", tags: ["Offline"] },
+    { date: "Nov 22",         last: "2026-11-22", name: "Low Kick Online",       place: "North America",      tags: ["Online", "AWT Silver"] },
+    { date: "Nov 27\u201329", last: "2026-11-29", name: "MINDSET 2026",          place: "France",             tags: ["Offline"] },
+    { date: "Dec 5",          last: "2026-12-05", name: "Wallbreaker",           place: "South America",      tags: ["Online", "AWT Silver"] },
+    { date: "Dec 12",         last: "2026-12-12", name: "Heaven\u2019s Edge",       place: "Middle East & North Africa", tags: ["Online", "AWT Silver"] } ] },
+  { name: "2027", events: [
+    { date: "Jan 9",          last: "2027-01-09", name: "Wai-Wai ThankSTRIVE 5", place: "Japan",              tags: ["Offline"] },
+    { date: "Jan 15\u201317", last: "2027-01-17", name: "Evo Singapore",         place: "Marina Bay Sands, Singapore", tags: ["Offline"], evo: true },
+    { date: "Jan 23\u201324", last: "2027-01-24", name: "AUTplayed 2027",        place: "Vienna, Austria",    tags: ["Offline"] },
+    { date: "Jan 28\u201331", last: "2027-01-31", name: "Frosty Faustings XIX",  place: "United States",      tags: ["Offline"] },
+    { date: "Mar 5\u20137",   last: "2027-03-07", name: "ARC World Tour Finals", place: "Terminal 5, New York City", tags: ["Offline", "AWT Finals"] },
+    { date: "Mar 26\u201328", last: "2027-03-28", name: "Evo Brazil",            place: "Expo Center Norte, S\u00E3o Paulo", tags: ["Offline"], evo: true },
+    { date: "Apr 30\u2013May 2", last: "2027-05-02", name: "Evo Japan",          place: "Tokyo Big Sight",    tags: ["Offline", "Strive lineup TBA"], evo: true },
+    { date: "Oct 22\u201324", last: "2027-10-24", name: "Evo France",            place: "France",             tags: ["Offline", "Strive lineup TBA"], evo: true } ] },
+  { name: "To be announced", events: [
+    { date: "TBD", name: "Evo Las Vegas 2027", place: "Las Vegas, United States", tags: ["Offline", "Dates TBD", "Strive lineup TBA"], evo: true, tbd: true } ] }
+];
+const EVENTS_NOTE = "Compiled from Liquipedia and Evo\u2019s announcements. Dates can change and more Arc World Tour events get added through the season, so check each event\u2019s official page. Other 2027 Evo stops (Morocco, Mexico, Saudi Arabia, China) have no dates or game lineups yet.";
+
+/* ======================= CODE ======================= */
+
+const stage = document.getElementById("stage");
+const enableBtn = document.getElementById("enable");
+const hint = document.getElementById("hint");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const TAU = Math.PI * 2;
+
+// Build the layers
+const layers = LAYERS.map((cfg, i) => {
+  const img = new Image();
+  img.className = "layer";
+  img.alt = "";
+  img.draggable = false;
+  img.src = cfg.src;
+  img.style.transformOrigin = cfg.origin || "50% 50%";
+  const rest = cfg.rest != null ? cfg.rest : 0;
+  if (cfg.controlled) img.style.opacity = rest;
+  stage.insertBefore(img, stage.querySelector(".ui"));
+  return {
+    id: cfg.id,
+    el: img,
+    depth: cfg.depth,
+    rotate: cfg.rotate || 0,
+    idleRotate: cfg.idleRotate || 0,
+    breathe: cfg.breathe || 0,
+    controlled: !!cfg.controlled,
+    rest: rest,
+    phase: i * 1.7,
+    shift: 0,
+    lastOp: -1
+  };
+});
+
+// Match stage to the first layer's aspect ratio
+function setAspect() {
+  const first = layers[0].el;
+  if (first.naturalWidth) stage.style.setProperty("--ar", first.naturalWidth / first.naturalHeight);
+  sizeLayers();
+}
+layers[0].el.addEventListener("load", setAspect);
+if (layers[0].el.complete) setAspect();
+
+// Each layer is enlarged by the distance it can travel, so edges never show.
+function sizeLayers() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  layers.forEach(l => {
+    l.shift = l.depth * MAX_SHIFT * w;
+    const pad = l.shift;
+    l.el.style.left = -pad + "px";
+    l.el.style.top = -pad + "px";
+    l.el.style.width = (w + pad * 2) + "px";
+    l.el.style.height = (h + pad * 2) + "px";
+  });
+}
+new ResizeObserver(sizeLayers).observe(stage);
+
+/* ---------- Doodle groups: build each group's frame order once ---------- */
+
+for (const g of DOODLE_GROUPS) {
+  const n = g.ids.length;
+  g.seq = [];
+  for (let i = 0; i < n; i++) g.seq.push(i);                       // 0,1,2...
+  if (g.mode === "pingpong") {
+    for (let i = n - 2; i >= 1; i--) g.seq.push(i);                // ...then back down, without repeating the ends
+  }
+  g.cycle = g.seq.length * g.frameTime;                            // length of one pass
+  g.total = g.cycle + g.pause;                                     // pass plus rest
+}
+
+/* ---------- Movement state ---------- */
+
+let tx = 0, ty = 0, cx = 0, cy = 0;
+
+/* ---------- Scene (bloom, spotlights, smoke, rim light, doodles) ---------- */
+
+let op = {};            // opacity per controlled layer this frame, by id
+let sc = {};            // extra scale per layer this frame, by id
+let pulseStart = -99;   // time of the last tap (seconds)
+let lit = 0;            // current rim-light amount, 0 to 1
+let lastMove = 0;       // last time the tilt or mouse moved
+let prevTx = 0, prevTy = 0;
+
+function runScene(t) {
+  op = {};
+  sc = {};
+
+  // Light bloom: irregular idle twinkle, plus a pulse on tap
+  const wobble = 0.6 * Math.sin(t * 1.9) + 0.4 * Math.sin(t * 4.3 + 1.3);   // -1 to 1
+  const tw = TWINKLE_MIN + (TWINKLE_MAX - TWINKLE_MIN) * (0.5 + 0.5 * wobble);
+  const k = t - pulseStart;
+  let p = 0;
+  if (k >= 0) p = k < PULSE_RISE ? k / PULSE_RISE : Math.exp(-(k - PULSE_RISE) * PULSE_DECAY);
+  op.bloom = tw + (1 - tw) * p;
+  sc.bloom = 1 + PULSE_SCALE * p;
+
+  // Background spotlights: their own twinkle rhythm, same tap pulse (no swelling, so they stay on the stage)
+  const wobble2 = 0.55 * Math.sin(t * 1.3 + 2.0) + 0.45 * Math.sin(t * 3.1 + 0.4);
+  const spot = SPOT_MIN + (SPOT_MAX - SPOT_MIN) * (0.5 + 0.5 * wobble2);
+  let ps = 0;
+  if (k >= 0) ps = k < PULSE_RISE ? k / PULSE_RISE : Math.exp(-(k - PULSE_RISE) * SPOT_PULSE_DECAY);
+  op.bglight = spot + (1 - spot) * ps;
+
+  // Smoke: smooth ease in and out
+  for (const s of SMOKE) {
+    const e = (1 - Math.cos(t * TAU / s.period + s.phase)) / 2;   // 0 to 1
+    const eased = e * e * (3 - 2 * e);                            // softer at both ends
+    op[s.id] = s.min + (s.max - s.min) * eased;
+  }
+
+  // Rim-lit guitarist: strength follows tilt, falls back to 0 when still
+  const moved = Math.abs(tx - prevTx) + Math.abs(ty - prevTy);
+  prevTx = tx; prevTy = ty;
+  if (moved > LIT_MOVE_EPS) lastMove = t;
+  const idle = (t - lastMove) > LIT_IDLE_AFTER;
+  const target = idle ? 0 : clamp(Math.hypot(cx, cy) * LIT_TILT_GAIN, 0, 1);
+  lit += (target - lit) * LIT_SMOOTH;
+  op.lit = lit;
+
+  // Doodle groups: each steps through its own frames on its own clock
+  for (const g of DOODLE_GROUPS) {
+    let frameIdx = 0;                                             // resting frame
+    const u = t - g.offset;
+    if (u >= 0) {
+      const m = u % g.total;
+      if (m < g.cycle) {
+        frameIdx = g.seq[Math.min(g.seq.length - 1, Math.floor(m / g.frameTime))];
+      }
+    }
+    for (let i = 0; i < g.ids.length; i++) op[g.ids[i]] = (i === frameIdx) ? 1 : 0;
+  }
+}
+
+function frame(now) {
+  const t = now / 1000;
+  cx += (tx - cx) * SMOOTHING;
+  cy += (ty - cy) * SMOOTHING;
+
+  runScene(t);
+
+  for (const l of layers) {
+    const dx = -cx * l.shift * DIRECTION;
+    const dy = -cy * l.shift * DIRECTION;
+
+    const rot =
+      cx * l.rotate * DIRECTION +
+      Math.sin(t * TAU / IDLE_PERIOD + l.phase) * l.idleRotate;
+
+    let sx = 1, sy = 1;
+    if (l.breathe) {
+      const s = Math.sin(t * TAU / BREATH_PERIOD);
+      sy = 1 + l.breathe * s;
+      sx = 1 + l.breathe * 0.35 * s;
+    }
+    const boost = sc[l.id] || 1;
+    sx *= boost; sy *= boost;
+
+    l.el.style.transform =
+      "translate3d(" + dx + "px," + dy + "px,0) rotate(" + rot + "deg) scale(" + sx + "," + sy + ")";
+
+    if (l.controlled) {
+      const v = (l.id in op) ? op[l.id] : l.rest;
+      if (v !== l.lastOp) { l.el.style.opacity = v; l.lastOp = v; }
+    }
+  }
+  requestAnimationFrame(frame);
+}
+if (!reduceMotion) requestAnimationFrame(frame);
+
+/* ---------- Input: mouse, tilt, taps ---------- */
+
+stage.addEventListener("pointermove", e => {
+  if (e.pointerType === "touch" || reduceMotion) return;
+  const r = stage.getBoundingClientRect();
+  tx = clamp(((e.clientX - r.left) / r.width) * 2 - 1, -1, 1);
+  ty = clamp(((e.clientY - r.top) / r.height) * 2 - 1, -1, 1);
+});
+stage.addEventListener("pointerleave", e => {
+  if (e.pointerType !== "touch") { tx = 0; ty = 0; }
+});
+
+let base = null;
+let gotSensor = false;
+
+function onOrientation(e) {
+  if (e.gamma == null || e.beta == null || reduceMotion) return;
+  gotSensor = true;
+  if (!base) base = { g: e.gamma, b: e.beta };
+  tx = clamp((e.gamma - base.g) / TILT_RANGE, -1, 1);
+  ty = clamp((e.beta - base.b) / TILT_RANGE, -1, 1);
+}
+
+function showHint(text, ms) {
+  hint.textContent = text;
+  hint.classList.remove("hidden", "fade");
+  clearTimeout(showHint.t);
+  showHint.t = setTimeout(() => {
+    hint.classList.add("fade");
+    setTimeout(() => hint.classList.add("hidden"), 700);
+  }, ms);
+}
+
+function startTilt() {
+  window.addEventListener("deviceorientation", onOrientation);
+  window.addEventListener("devicemotion", onMotion);
+  enableBtn.classList.add("hidden");
+  showHint("Tilt your phone. Hold for I-No\u2019s theme. Shake for events. Tap to pulse the lights.", 6000);
+  setTimeout(() => {
+    if (!gotSensor) showHint("No motion sensor found. Move your mouse over the image.", 4000);
+  }, 1500);
+}
+
+/* ---------- Music: long press to play / stop ---------- */
+
+const audio = new Audio();
+audio.preload = "auto";
+audio.loop = AUDIO_LOOP;
+audio.volume = AUDIO_VOLUME;
+audio.src = encodeURI(AUDIO_SRC);
+let audioFailed = false;
+let clipEnd = AUDIO_LENGTH > 0 ? AUDIO_START + AUDIO_LENGTH : Infinity;
+
+audio.addEventListener("error", () => {
+  audioFailed = true;
+  showHint("Couldn't load \"" + AUDIO_SRC + "\". Check the file is in the same folder as this page and the name matches.", 6000);
+});
+function rewind() { try { audio.currentTime = AUDIO_START; } catch (e) {} audio.volume = AUDIO_VOLUME; }
+audio.addEventListener("loadedmetadata", rewind);
+audio.addEventListener("ended", () => { if (AUDIO_LOOP) { rewind(); audio.play().catch(() => {}); } else rewind(); });
+
+// A clip ends at start + length even though the file is longer: fade out, then stop (or loop)
+setInterval(() => {
+  if (audio.paused || clipEnd === Infinity) return;
+  const t = audio.currentTime;
+  if (t >= clipEnd) {
+    if (AUDIO_LOOP) rewind(); else { audio.pause(); rewind(); }
+    return;
+  }
+  if (AUDIO_FADE > 0 && clipEnd - t < AUDIO_FADE) audio.volume = AUDIO_VOLUME * Math.max(0, (clipEnd - t) / AUDIO_FADE);
+  else if (audio.volume !== AUDIO_VOLUME) audio.volume = AUDIO_VOLUME;
+}, 80);
+
+// Phones can refuse to start sound that isn't tied to a tap. The first touch (or the Enable button)
+// "unlocks" the player silently so the long press can start it reliably.
+let primed = false;
+function primeAudio() {
+  if (primed) return;
+  primed = true;
+  audio.muted = true;
+  const p = audio.play();
+  const finish = () => { audio.pause(); rewind(); audio.muted = false; };
+  if (p && p.then) p.then(finish, () => { audio.muted = false; primed = false; });
+  else finish();
+}
+window.addEventListener("pointerdown", primeAudio, { once: false, passive: true });
+
+// Returns true if playback started
+function startMusic() {
+  if (audioFailed) return Promise.resolve(true);
+  if (audio.currentTime < AUDIO_START || audio.currentTime >= clipEnd) rewind();
+  audio.muted = false;
+  audio.volume = AUDIO_VOLUME;
+  const p = audio.play();
+  return (p && p.then) ? p.then(() => true, () => false) : Promise.resolve(true);
+}
+function stopMusic() { audio.pause(); rewind(); }
+
+// Long press: stop if playing, otherwise start
+let pendingPlay = false;   // set if the phone refused to start mid-press, so the release retries
+function toggleMusic() {
+  if (!audio.paused) { stopMusic(); showHint("\u23F8 Stopped", 900); return; }
+  startMusic().then(ok => {
+    if (ok) { if (!audioFailed) showHint("\u25B6 I-No\u2019s theme", 1200); }
+    else pendingPlay = true;
+  });
+}
+
+// Shake (or mouse wiggle): open the events list
+let lastShake = -99;
+function onShake() {
+  const now = performance.now() / 1000;
+  if (now - lastShake < SHAKE_COOLDOWN) return;
+  lastShake = now;
+  if (sheetOpen) return;
+  if (navigator.vibrate) navigator.vibrate(15);
+  openSheet();
+}
+
+// Phone shake: count sharp jolts in a short window
+let lastAcc = null;
+let spikes = [];
+let gotMotion = false;
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  gotMotion = true;
+  if (lastAcc) {
+    const jolt = Math.abs(a.x - lastAcc.x) + Math.abs(a.y - lastAcc.y) + Math.abs(a.z - lastAcc.z);
+    const t = performance.now() / 1000;
+    if (jolt > SHAKE_THRESHOLD) spikes.push(t);
+    spikes = spikes.filter(x => t - x <= SHAKE_WINDOW);
+    if (spikes.length >= SHAKE_SPIKES) { spikes = []; onShake(); }
+  }
+  lastAcc = { x: a.x, y: a.y, z: a.z };
+}
+
+// Mouse shake: count quick back-and-forth strokes on either axis (so it can be tried on a computer)
+const mouseAxes = { x: { dir: 0, ext: 0 }, y: { dir: 0, ext: 0 } };
+let strokes = [];
+function trackAxis(a, v, t) {
+  if (a.dir === 0) { a.dir = 1; a.ext = v; return; }
+  if ((v - a.ext) * a.dir > 0) { a.ext = v; return; }
+  if (Math.abs(v - a.ext) >= MOUSE_MIN_STROKE) { a.dir = -a.dir; a.ext = v; strokes.push(t); }
+}
+window.addEventListener("pointermove", e => {
+  if (e.pointerType !== "mouse" || reduceMotion) return;
+  const t = performance.now() / 1000;
+  trackAxis(mouseAxes.x, e.clientX, t);
+  trackAxis(mouseAxes.y, e.clientY, t);
+  strokes = strokes.filter(x => t - x <= MOUSE_WINDOW);
+  if (strokes.length >= MOUSE_STROKES) { strokes = []; onShake(); }
+});
+
+/* ---------- Events list (opened by a shake) ---------- */
+
+const sheet = document.getElementById("sheet");
+let sheetOpen = false;
+
+function todayISO() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: EVENTS_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const get = type => (parts.find(p => p.type === type) || {}).value;
+  return get("year") + "-" + get("month") + "-" + get("day");
+}
+
+function renderSheet() {
+  const today = todayISO();
+  const box = document.getElementById("groups");
+  box.textContent = "";
+  EVENT_GROUPS.forEach(g => {
+    const h = document.createElement("h3");
+    h.textContent = g.name;
+    box.appendChild(h);
+    g.events.forEach(ev => {
+      const done = !!ev.last && ev.last < today;
+      const row = document.createElement("div");
+      row.className = "ev" + (ev.evo ? " evo" : "") + (done ? " done" : "");
+      const d = document.createElement("div"); d.className = "d"; d.textContent = ev.date;
+      const n = document.createElement("div"); n.className = "n"; n.textContent = ev.name;
+      const pl = document.createElement("div"); pl.className = "p"; pl.textContent = ev.place;
+      const tg = document.createElement("div"); tg.className = "tags";
+      (ev.tags || []).forEach(t => {
+        const span = document.createElement("span");
+        span.className = "tag" + (/TB[DA]/.test(t) ? " tbd" : "");
+        span.textContent = t;
+        tg.appendChild(span);
+      });
+      if (ev.evo) { const e = document.createElement("span"); e.className = "tag evotag"; e.textContent = "Evo"; tg.prepend(e); }
+      row.append(d, n, pl, tg);
+      box.appendChild(row);
+    });
+  });
+  document.getElementById("sheetNote").textContent = EVENTS_NOTE;
+}
+
+function openSheet() {
+  renderSheet();
+  sheet.scrollTop = 0;
+  sheet.classList.add("open");
+  sheet.setAttribute("aria-hidden", "false");
+  sheetOpen = true;
+}
+function closeSheet() {
+  sheet.classList.remove("open");
+  sheet.setAttribute("aria-hidden", "true");
+  sheetOpen = false;
+}
+document.getElementById("sheetClose").addEventListener("click", closeSheet);
+window.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+
+/* ---------- Taps and long press ---------- */
+
+// Tap = pulse the bloom and spotlights. Double-tap = re-center the tilt.
+// Hold (LONG_PRESS_TIME) without moving = play / stop the music. A tap while the events list is open closes it.
+let lastTap = 0;
+let hold = null;
+function cancelHold() { if (hold) { clearTimeout(hold.timer); hold = null; } }
+
+stage.addEventListener("pointerdown", e => {
+  if (e.target.closest && e.target.closest(".ui button")) return;
+  if (sheetOpen) { closeSheet(); lastTap = 0; return; }
+  cancelHold();
+  const mine = { x: e.clientX, y: e.clientY, id: e.pointerId, timer: null };
+  mine.timer = setTimeout(() => {
+    if (hold !== mine) return;
+    hold = null;
+    if (navigator.vibrate) navigator.vibrate(20);
+    toggleMusic();
+  }, LONG_PRESS_TIME * 1000);
+  hold = mine;
+
+  const now = performance.now();
+  if (now - lastTap < 350) {
+    base = null;
+    lastTap = 0;
+    showHint("Re-centered.", 1200);
+    return;
+  }
+  lastTap = now;
+  if (!reduceMotion) pulseStart = now / 1000;
+});
+stage.addEventListener("pointermove", e => {
+  if (hold && hold.id === e.pointerId && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > TAP_MAX_MOVE) cancelHold();
+});
+stage.addEventListener("pointerup", () => {
+  cancelHold();
+  if (pendingPlay) { pendingPlay = false; startMusic(); }   // retry on release if the phone refused mid-press
+});
+stage.addEventListener("pointercancel", () => { cancelHold(); pendingPlay = false; });
+stage.addEventListener("contextmenu", e => e.preventDefault());
+
+/* ---------- Motion permission (iOS) and start-up ---------- */
+
+// iOS needs a tap to grant motion access (one prompt covers both tilt and shake)
+const needsPermission =
+  (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") ||
+  (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function");
+
+const isTouch = matchMedia("(pointer: coarse)").matches;
+
+if (needsPermission) {
+  enableBtn.textContent = "Tap to enable tilt & shake";
+  enableBtn.classList.remove("hidden");
+  enableBtn.addEventListener("click", async () => {
+    primeAudio();                                       // this tap unlocks the music for the long press
+    try {
+      const req = typeof DeviceMotionEvent.requestPermission === "function"
+        ? DeviceMotionEvent.requestPermission()
+        : DeviceOrientationEvent.requestPermission();
+      const result = await req;
+      if (result === "granted") {
+        startTilt();
+      } else {
+        enableBtn.classList.add("hidden");
+        showHint("Motion access was denied. Reload the page to try again.", 5000);
+      }
+    } catch (err) {
+      showHint("Couldn't enable motion on this page.", 4000);
+    }
+  });
+} else if (isTouch && ("DeviceOrientationEvent" in window || "DeviceMotionEvent" in window)) {
+  startTilt();
+} else {
+  showHint("Move your mouse over the image. Click to pulse the lights. Hold for I-No\u2019s theme. Wiggle the mouse for events.", 6000);
+}
+</script>
+</body>
+</html>
